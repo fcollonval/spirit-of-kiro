@@ -46,11 +46,33 @@ export class PhysicsSystem {
         // Tab is hidden, pause physics
         this.stop();
       } else {
-        // Tab is visible again, reset timestamp and restart if needed
+        // Tab is visible again, restart if needed
+        // Reset timestamp to prevent large delta time on tab refocus
         this.lastTimestamp = performance.now();
+        
+        // Reset any active physics objects to prevent the "haywire" effect
+        this.resetActiveObjectVelocities();
+        
         if (this.hasActivePhysics.value && this.animationFrameId === null) {
           this.start();
         }
+      }
+    });
+
+    // Also handle window focus/blur events for additional safety
+    window.addEventListener('blur', () => {
+      this.stop();
+    });
+
+    window.addEventListener('focus', () => {
+      // Reset timestamp to prevent large delta time on window refocus
+      this.lastTimestamp = performance.now();
+      
+      // Reset any active physics objects to prevent the "haywire" effect
+      this.resetActiveObjectVelocities();
+      
+      if (this.hasActivePhysics.value && this.animationFrameId === null) {
+        this.start();
       }
     });
   }
@@ -75,11 +97,31 @@ export class PhysicsSystem {
   private update(timestamp: number) {
     // Calculate delta time in seconds
     let deltaTime = (timestamp - this.lastTimestamp) / 1000;
-    this.lastTimestamp = timestamp;
+    
+    // Handle edge cases that can cause physics instability:
+    // 1. Negative delta time (can happen after tab switching)
+    // 2. Very large delta time (tab was inactive for a long time)
+    // 3. Very small delta time (can cause division by zero issues)
+    if (deltaTime < 0 || deltaTime > 0.1) {
+      // Reset timing and skip this frame
+      this.lastTimestamp = timestamp;
+      
+      // If delta time was very large (tab was inactive), also reset velocities
+      if (deltaTime > 0.1) {
+        this.resetActiveObjectVelocities();
+      }
+      
+      this.animationFrameId = requestAnimationFrame(this.update.bind(this));
+      return;
+    }
     
     // Cap delta time to prevent physics instability from large jumps
-    const MAX_DELTA_TIME = 1/30; // Cap at ~33ms (30 FPS equivalent)
-    deltaTime = Math.min(deltaTime, MAX_DELTA_TIME);
+    // Make this even more conservative to ensure smooth physics
+    const MAX_DELTA_TIME = 1/60; // Cap at ~16ms (60 FPS equivalent)
+    const MIN_DELTA_TIME = 1/240; // Minimum delta time to prevent division issues
+    deltaTime = Math.max(MIN_DELTA_TIME, Math.min(deltaTime, MAX_DELTA_TIME));
+    
+    this.lastTimestamp = timestamp;
     
     // Update physics for all objects
     this.updatePhysics(deltaTime);
@@ -98,6 +140,25 @@ export class PhysicsSystem {
 
       if (obj.physics.physicsType == PhysicsType.Static || obj.physics.physicsType == PhysicsType.Field) {
         // These items don't collide with each other
+        continue;
+      }
+
+      // Safety check: Reset objects that have gone completely haywire
+      if (!isFinite(obj.row) || !isFinite(obj.col) || 
+          !isFinite(obj.physics.velocity) || !isFinite(obj.physics.verticalVelocity) ||
+          Math.abs(obj.row) > 1000 || Math.abs(obj.col) > 1000 ||
+          obj.physics.velocity > 100 || Math.abs(obj.physics.verticalVelocity) > 100) {
+        
+        // Reset object to a safe state
+        obj.row = Math.max(0, Math.min(50, obj.row || 10));
+        obj.col = Math.max(0, Math.min(50, obj.col || 10));
+        obj.physics = {
+          ...obj.physics,
+          velocity: 0,
+          verticalVelocity: 0,
+          height: 0,
+          active: false
+        };
         continue;
       }
 
@@ -304,5 +365,34 @@ export class PhysicsSystem {
     
     // Add vertical impulse
     object.physics.verticalVelocity += force / object.physics.mass;
+  }
+  
+  // Reset velocities of active physics objects to prevent the "haywire" effect when tabbing back in
+  resetActiveObjectVelocities() {
+    // Find all objects with active physics
+    const activeObjects = this.physicsObjects.value.filter(obj => 
+      obj.physics && obj.physics.active === true
+    );
+    
+    // Apply velocity damping to all active objects
+    for (const obj of activeObjects) {
+      if (!obj.physics) continue;
+      
+      // If object is moving fast, reduce its velocity significantly
+      if (obj.physics.velocity > 5) {
+        obj.physics.velocity *= 0.3; // Reduce horizontal velocity by 70%
+      }
+      
+      // If object is bouncing high, reduce vertical velocity
+      if (Math.abs(obj.physics.verticalVelocity) > 3) {
+        obj.physics.verticalVelocity *= 0.3; // Reduce vertical velocity by 70%
+      }
+      
+      // If object is very high in the air, bring it down gently
+      if (obj.physics.height > 5) {
+        obj.physics.height = Math.min(obj.physics.height, 5);
+        obj.physics.verticalVelocity = Math.min(obj.physics.verticalVelocity, 0);
+      }
+    }
   }
 }

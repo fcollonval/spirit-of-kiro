@@ -56,19 +56,42 @@ export function updatePhysicsPosition(
     return { row, col, physics };
   }
 
+  // Additional safety check for extreme delta times
+  if (deltaTime <= 0 || deltaTime > 0.1 || !isFinite(deltaTime)) {
+    // For safety, slightly dampen velocities when skipping frames due to timing issues
+    return { 
+      row, 
+      col, 
+      physics: {
+        ...physics,
+        velocity: physics.velocity * 0.95, // Slightly reduce velocity
+        verticalVelocity: physics.verticalVelocity * 0.95 // Slightly reduce vertical velocity
+      } 
+    };
+  }
+
   // Convert angle and velocity to vector
   const velocityVector = angleToVector(physics.angle, physics.velocity);
   
+  // Cap velocity to prevent extreme movements
+  const MAX_VELOCITY = 50; // Maximum velocity in tiles per second
+  const cappedVelocity = Math.min(physics.velocity, MAX_VELOCITY);
+  const cappedVelocityVector = angleToVector(physics.angle, cappedVelocity);
+  
   // Update position based on velocity
-  const newCol = col + (velocityVector.x * deltaTime);
-  const newRow = row + (velocityVector.y * deltaTime);
+  const newCol = col + (cappedVelocityVector.x * deltaTime);
+  const newRow = row + (cappedVelocityVector.y * deltaTime);
   
   // Apply friction to slow down the object
-  let newVelocity = physics.velocity * (1 - physics.friction * deltaTime);
+  let newVelocity = cappedVelocity * (1 - physics.friction * deltaTime);
+  
+  // Cap vertical velocity to prevent extreme movements
+  const MAX_VERTICAL_VELOCITY = 30; // Maximum vertical velocity
+  const cappedVerticalVelocity = Math.max(-MAX_VERTICAL_VELOCITY, Math.min(MAX_VERTICAL_VELOCITY, physics.verticalVelocity));
   
   // Update vertical position based on vertical velocity
-  let newHeight = physics.height + (physics.verticalVelocity * deltaTime);
-  let newVerticalVelocity = physics.verticalVelocity;
+  let newHeight = physics.height + (cappedVerticalVelocity * deltaTime);
+  let newVerticalVelocity = cappedVerticalVelocity;
   
   // Apply gravity if object is above ground
   const gravity = 9.8; // Gravity constant in tile units per second squared
@@ -102,16 +125,23 @@ export function updatePhysicsPosition(
     newVerticalVelocity = 0;
   }
   
+  // Ensure positions are within reasonable bounds
+  const MAX_POSITION = 1000; // Maximum position coordinate
+  const MIN_POSITION = -100; // Minimum position coordinate
+  const clampedRow = Math.max(MIN_POSITION, Math.min(MAX_POSITION, newRow));
+  const clampedCol = Math.max(MIN_POSITION, Math.min(MAX_POSITION, newCol));
+  const clampedHeight = Math.max(0, Math.min(20, newHeight)); // Height between 0 and 20 tiles
+  
   // Update physics properties
   const updatedPhysics = { 
     ...physics, 
     velocity: newVelocity,
-    height: newHeight,
+    height: clampedHeight,
     verticalVelocity: newVerticalVelocity,
-    active: newVelocity > 0 || newHeight > 0 || Math.abs(newVerticalVelocity) > 0
+    active: newVelocity > 0 || clampedHeight > 0 || Math.abs(newVerticalVelocity) > 0
   };
   
-  return { row: newRow, col: newCol, physics: updatedPhysics };
+  return { row: clampedRow, col: clampedCol, physics: updatedPhysics };
 }
 
 // Check for collision between two objects
