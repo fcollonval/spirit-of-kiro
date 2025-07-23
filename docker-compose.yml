@@ -60,7 +60,7 @@ services:
     env_file:
       - dev.env
     environment:
-      AWS_REGION: us-west-2
+      AWS_REGION: eu-north-1
       DYNAMODB_ENDPOINT: http://dynamodb-local:8000
       # This ENV VAR enables credentials
       # Set it to "/creds" or "/role/<role name>"

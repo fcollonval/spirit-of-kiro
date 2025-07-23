@@ -4,7 +4,7 @@ const { parse } = require('yaml');
 
 // Configuration
 const DYNAMODB_ENDPOINT = process.env.DYNAMODB_ENDPOINT || 'http://localhost:8000';
-const REGION = 'us-west-2'; // This doesn't matter for local DynamoDB
+const REGION = 'eu-north-1'; // This doesn't matter for local DynamoDB
 const TEMPLATE_PATH = './server/iac/dynamodb.yml';
 
 // Initialize DynamoDB client

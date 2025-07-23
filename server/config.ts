@@ -63,5 +63,5 @@ export const ITEM_IMAGES_SERVICE_CONFIG = {
 export const COGNITO_CONFIG = {
   userPoolId: getEnv('COGNITO_USER_POOL_ID') || '',
   clientId: getEnv('COGNITO_CLIENT_ID') || '',
-  region: getEnv('AWS_REGION') || 'us-west-2'
+  region: getEnv('AWS_REGION') || 'eu-north-1'
 };

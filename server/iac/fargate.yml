@@ -111,7 +111,7 @@ Parameters:
 
   CertificateArn:
     Type: String
-    Default: arn:aws:acm:us-west-2:784059518401:certificate/14770f21-c779-4947-aeb9-df15e77c549e
+    Default: arn:aws:acm:eu-north-1:784059518401:certificate/14770f21-c779-4947-aeb9-df15e77c549e
     Description: ARN of the ACM certificate
 
   CognitoUserPoolId:

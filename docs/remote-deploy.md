@@ -57,8 +57,8 @@ For production deployments, use the automated deployment script that handles all
 ```
 
 This script will:
-1. Deploy the item-images service to `us-west-2`
-2. Deploy the server to `us-west-2`
+1. Deploy the item-images service to `eu-north-1`
+2. Deploy the server to `eu-north-1`
 3. Deploy the client to `us-east-1` (Necessary for Lamdbda@Edge)
 4. Configure all necessary connections between components
 

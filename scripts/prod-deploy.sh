@@ -6,7 +6,7 @@ set -e
 # Define stack prefixes and regions
 ITEM_IMAGES_PREFIX="kiro-game-images"
 SERVER_PREFIX="game-server"
-WEST_REGION="us-west-2"
+WEST_REGION="eu-north-1"
 EAST_REGION="us-east-1"
 
 # Deploy item-images

@@ -193,7 +193,7 @@ aws cloudformation deploy \
     PersonaTableName=$PERSONA_TABLE_NAME \
     PersonaTableArn=$PERSONA_TABLE_ARN \
     DomainName="game-server.nathanpeck.gg" \
-    CertificateArn="arn:aws:acm:us-west-2:784059518401:certificate/14770f21-c779-4947-aeb9-df15e77c549e" \
+    CertificateArn="arn:aws:acm:eu-north-1:784059518401:certificate/14770f21-c779-4947-aeb9-df15e77c549e" \
     CognitoUserPoolId=$COGNITO_USER_POOL_ID \
     CognitoClientId=$COGNITO_CLIENT_ID
 
