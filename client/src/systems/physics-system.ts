@@ -14,6 +14,11 @@ export class PhysicsSystem {
   private lastTimestamp: number = 0;
   private animationFrameId: number | null = null;
   private hasActivePhysics: Ref<boolean>;
+  
+  // Fixed timestep physics variables
+  private fixedTimeStep: number = 1/120; // Fixed physics update at 120Hz
+  private accumulator: number = 0;
+  private maxAccumulatedTime: number = 0.2; // Prevent spiral of death
 
   private physicsObjects = computed(() => this.objects.value.filter(obj => obj.physics))
   private walls = computed(() => this.objects.value.filter(obj => obj.physics && obj.physics.mass == Infinity))
@@ -26,6 +31,9 @@ export class PhysicsSystem {
     this.lastTimestamp = performance.now();
     const self = this;
     this.gameStore = useGameStore();
+    
+    // Adjust physics quality based on device performance
+    this.adjustPhysicsQuality();
 
     // Watch activeObjects to control physics loop
     watch(this.activeObjects, (newActiveObjects) => {
@@ -49,6 +57,7 @@ export class PhysicsSystem {
         // Tab is visible again, restart if needed
         // Reset timestamp to prevent large delta time on tab refocus
         this.lastTimestamp = performance.now();
+        this.accumulator = 0; // Reset accumulator to prevent physics jumps
         
         // Reset any active physics objects to prevent the "haywire" effect
         this.resetActiveObjectVelocities();
@@ -67,6 +76,7 @@ export class PhysicsSystem {
     window.addEventListener('focus', () => {
       // Reset timestamp to prevent large delta time on window refocus
       this.lastTimestamp = performance.now();
+      this.accumulator = 0; // Reset accumulator to prevent physics jumps
       
       // Reset any active physics objects to prevent the "haywire" effect
       this.resetActiveObjectVelocities();
@@ -84,6 +94,7 @@ export class PhysicsSystem {
     
     // Start the physics loop
     this.lastTimestamp = performance.now();
+    this.accumulator = 0; // Reset accumulator when starting physics
     this.animationFrameId = requestAnimationFrame(this.update.bind(this));
   }
 
@@ -95,36 +106,54 @@ export class PhysicsSystem {
   }
 
   private update(timestamp: number) {
-    // Calculate delta time in seconds
-    let deltaTime = (timestamp - this.lastTimestamp) / 1000;
+    // Calculate frame time in seconds
+    let frameTime = (timestamp - this.lastTimestamp) / 1000;
+    this.lastTimestamp = timestamp;
     
     // Handle edge cases that can cause physics instability:
-    // 1. Negative delta time (can happen after tab switching)
-    // 2. Very large delta time (tab was inactive for a long time)
-    // 3. Very small delta time (can cause division by zero issues)
-    if (deltaTime < 0 || deltaTime > 0.1) {
-      // Reset timing and skip this frame
-      this.lastTimestamp = timestamp;
-      
-      // If delta time was very large (tab was inactive), also reset velocities
-      if (deltaTime > 0.1) {
-        this.resetActiveObjectVelocities();
-      }
-      
+    // 1. Negative frame time (can happen after tab switching)
+    // 2. Very large frame time (tab was inactive for a long time)
+    if (frameTime < 0) {
+      // Just reset timing and skip this frame for negative time
       this.animationFrameId = requestAnimationFrame(this.update.bind(this));
       return;
     }
     
-    // Cap delta time to prevent physics instability from large jumps
-    // Make this even more conservative to ensure smooth physics
-    const MAX_DELTA_TIME = 1/60; // Cap at ~16ms (60 FPS equivalent)
-    const MIN_DELTA_TIME = 1/240; // Minimum delta time to prevent division issues
-    deltaTime = Math.max(MIN_DELTA_TIME, Math.min(deltaTime, MAX_DELTA_TIME));
+    // Cap frame time to prevent spiral of death
+    if (frameTime > 0.25) {
+      // If frame time was very large (tab was inactive), reset velocities
+      this.resetActiveObjectVelocities();
+      frameTime = 0.1; // Use a reasonable default
+    }
     
-    this.lastTimestamp = timestamp;
+    // Accumulate time since last frame
+    this.accumulator += frameTime;
     
-    // Update physics for all objects
-    this.updatePhysics(deltaTime);
+    // Cap accumulated time to prevent spiral of death when returning from background
+    if (this.accumulator > this.maxAccumulatedTime) {
+      this.accumulator = this.maxAccumulatedTime;
+      // Reset velocities if we had to cap accumulated time
+      this.resetActiveObjectVelocities();
+    }
+    
+    // Run physics updates at fixed intervals while we have accumulated enough time
+    let updatesPerformed = 0;
+    const MAX_UPDATES_PER_FRAME = 10; // Safety limit to prevent freezing
+    
+    while (this.accumulator >= this.fixedTimeStep && updatesPerformed < MAX_UPDATES_PER_FRAME) {
+      // Update physics with fixed timestep
+      this.updatePhysics(this.fixedTimeStep);
+      
+      // Decrease accumulator by the fixed timestep
+      this.accumulator -= this.fixedTimeStep;
+      updatesPerformed++;
+    }
+    
+    // If we hit the max updates limit, discard remaining accumulated time
+    if (updatesPerformed >= MAX_UPDATES_PER_FRAME && this.accumulator >= this.fixedTimeStep) {
+      console.warn('Physics system: too many updates needed, discarding accumulated time');
+      this.accumulator = 0;
+    }
     
     // Continue the loop
     this.animationFrameId = requestAnimationFrame(this.update.bind(this));
@@ -367,6 +396,61 @@ export class PhysicsSystem {
     object.physics.verticalVelocity += force / object.physics.mass;
   }
   
+  // Adjust physics quality based on device performance
+  adjustPhysicsQuality() {
+    // Check if we're running on a mobile device
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    
+    // Check if we're on a low-end device by measuring FPS
+    let frameCount = 0;
+    let lastFpsCheck = performance.now();
+    let measuredFps = 60;
+    
+    const checkFps = () => {
+      frameCount++;
+      const now = performance.now();
+      const elapsed = now - lastFpsCheck;
+      
+      if (elapsed >= 1000) { // Check every second
+        measuredFps = frameCount * 1000 / elapsed;
+        frameCount = 0;
+        lastFpsCheck = now;
+        
+        // Adjust physics quality based on measured FPS
+        this.updatePhysicsQuality(measuredFps);
+      }
+      
+      requestAnimationFrame(checkFps);
+    };
+    
+    // Start FPS measurement
+    requestAnimationFrame(checkFps);
+    
+    // Initial quality setting based on device type
+    if (isMobile) {
+      // Use lower quality settings for mobile
+      this.fixedTimeStep = 1/60; // 60Hz physics updates
+    }
+  }
+  
+  // Update physics quality based on measured performance
+  updatePhysicsQuality(fps: number) {
+    // Adjust fixed timestep based on performance
+    if (fps < 30) {
+      // Low-end device or performance issues
+      this.fixedTimeStep = 1/30; // 30Hz physics updates
+      this.maxAccumulatedTime = 0.1; // More aggressive time capping
+    } else if (fps < 50) {
+      // Medium performance
+      this.fixedTimeStep = 1/60; // 60Hz physics updates
+      this.maxAccumulatedTime = 0.15;
+    } else {
+      // High performance
+      this.fixedTimeStep = 1/120; // 120Hz physics updates
+      this.maxAccumulatedTime = 0.2;
+    }
+  }
+  
   // Reset velocities of active physics objects to prevent the "haywire" effect when tabbing back in
   resetActiveObjectVelocities() {
     // Find all objects with active physics
@@ -378,20 +462,44 @@ export class PhysicsSystem {
     for (const obj of activeObjects) {
       if (!obj.physics) continue;
       
-      // If object is moving fast, reduce its velocity significantly
-      if (obj.physics.velocity > 5) {
-        obj.physics.velocity *= 0.3; // Reduce horizontal velocity by 70%
+      // Apply more aggressive velocity damping with fixed timestep system
+      // This prevents accumulated energy from causing chaos
+      
+      // Horizontal velocity damping
+      if (obj.physics.velocity > 0) {
+        // More aggressive damping for faster objects
+        const dampingFactor = obj.physics.velocity > 10 ? 0.2 : 
+                             obj.physics.velocity > 5 ? 0.3 : 0.5;
+        obj.physics.velocity *= dampingFactor;
       }
       
-      // If object is bouncing high, reduce vertical velocity
-      if (Math.abs(obj.physics.verticalVelocity) > 3) {
-        obj.physics.verticalVelocity *= 0.3; // Reduce vertical velocity by 70%
+      // Vertical velocity damping
+      if (Math.abs(obj.physics.verticalVelocity) > 0) {
+        // More aggressive damping for faster vertical movement
+        const vDampingFactor = Math.abs(obj.physics.verticalVelocity) > 8 ? 0.2 : 
+                              Math.abs(obj.physics.verticalVelocity) > 3 ? 0.3 : 0.5;
+        obj.physics.verticalVelocity *= vDampingFactor;
       }
       
-      // If object is very high in the air, bring it down gently
-      if (obj.physics.height > 5) {
-        obj.physics.height = Math.min(obj.physics.height, 5);
-        obj.physics.verticalVelocity = Math.min(obj.physics.verticalVelocity, 0);
+      // Height adjustment
+      if (obj.physics.height > 0) {
+        // Cap maximum height and ensure objects aren't stuck in the air
+        if (obj.physics.height > 5) {
+          obj.physics.height = 5;
+          // Force downward velocity for very high objects
+          obj.physics.verticalVelocity = Math.min(obj.physics.verticalVelocity, -2);
+        } else if (obj.physics.height > 2 && Math.abs(obj.physics.verticalVelocity) < 0.5) {
+          // If object is suspended with little vertical movement, help it come down
+          obj.physics.verticalVelocity = -1;
+        }
+      }
+      
+      // If object has extremely low energy, just put it to rest
+      if (obj.physics.velocity < 0.5 && Math.abs(obj.physics.verticalVelocity) < 0.5 && obj.physics.height < 0.5) {
+        obj.physics.velocity = 0;
+        obj.physics.verticalVelocity = 0;
+        obj.physics.height = 0;
+        obj.physics.active = false;
       }
     }
   }
