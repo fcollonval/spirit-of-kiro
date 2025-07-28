@@ -15,6 +15,8 @@ export interface PhysicsProperties {
   bounceStrength: number;  // How much velocity is retained on bounce (0-1)
   mass: number;  // Mass of object for collision calculations
   physicsType?: PhysicsType;  // Type of physics object (static, field, or dynamic), defaults to dynamic
+  sleepState?: 'awake' | 'sleeping'; // Whether the object is sleeping (inactive) or awake
+  sleepTimer?: number; // Timer to track how long an object has been still
 }
 
 export interface Vector2D {
@@ -70,8 +72,7 @@ export function updatePhysicsPosition(
     };
   }
 
-  // Convert angle and velocity to vector
-  const velocityVector = angleToVector(physics.angle, physics.velocity);
+  // We'll use capped velocity directly instead of the original velocity vector
   
   // Cap velocity to prevent extreme movements
   const MAX_VELOCITY = 50; // Maximum velocity in tiles per second
@@ -125,6 +126,24 @@ export function updatePhysicsPosition(
     newVerticalVelocity = 0;
   }
   
+  // Handle sleep state for performance optimization
+  let sleepState = physics.sleepState || 'awake';
+  let sleepTimer = physics.sleepTimer || 0;
+  
+  // Check if object should go to sleep
+  if (newVelocity < 0.05 && Math.abs(newVerticalVelocity) < 0.05 && newHeight < 0.05) {
+    // Object is nearly still, increment sleep timer
+    sleepTimer += deltaTime;
+    
+    if (sleepTimer > 1.0) { // 1 second of minimal movement
+      sleepState = 'sleeping';
+    }
+  } else {
+    // Object is moving, reset sleep timer
+    sleepTimer = 0;
+    sleepState = 'awake';
+  }
+  
   // Ensure positions are within reasonable bounds
   const MAX_POSITION = 1000; // Maximum position coordinate
   const MIN_POSITION = -100; // Minimum position coordinate
@@ -138,7 +157,10 @@ export function updatePhysicsPosition(
     velocity: newVelocity,
     height: clampedHeight,
     verticalVelocity: newVerticalVelocity,
-    active: newVelocity > 0 || clampedHeight > 0 || Math.abs(newVerticalVelocity) > 0
+    sleepState,
+    sleepTimer,
+    active: (sleepState === 'sleeping') ? false : 
+            (newVelocity > 0 || clampedHeight > 0 || Math.abs(newVerticalVelocity) > 0)
   };
   
   return { row: clampedRow, col: clampedCol, physics: updatedPhysics };
@@ -272,7 +294,9 @@ export function handleCollision(
     active: true,
     angle: newObj1.angle,
     velocity: newObj1.magnitude,
-    verticalVelocity: obj1VerticalVelocity
+    verticalVelocity: obj1VerticalVelocity,
+    sleepState: 'awake', // Wake up on collision
+    sleepTimer: 0
   };
   
   const obj2Physics: PhysicsProperties = {
@@ -280,7 +304,9 @@ export function handleCollision(
     active: true,
     angle: newObj2.angle,
     velocity: newObj2.magnitude,
-    verticalVelocity: obj2VerticalVelocity
+    verticalVelocity: obj2VerticalVelocity,
+    sleepState: 'awake', // Wake up on collision
+    sleepTimer: 0
   };
   
   return { obj1Physics, obj2Physics };

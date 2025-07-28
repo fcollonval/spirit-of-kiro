@@ -19,6 +19,14 @@ export class PhysicsSystem {
   private fixedTimeStep: number = 1/120; // Fixed physics update at 120Hz
   private accumulator: number = 0;
   private maxAccumulatedTime: number = 0.2; // Prevent spiral of death
+  
+  // Spatial partitioning for collision detection
+  private spatialGrid: Map<string, GameObject[]> = new Map();
+  private gridCellSize: number = 5; // Size of each grid cell in game units
+  
+  // Interpolation for smoother rendering
+  private previousStates: Map<string, {row: number, col: number, height: number}> = new Map();
+  private interpolationAlpha: number = 0;
 
   private physicsObjects = computed(() => this.objects.value.filter(obj => obj.physics))
   private walls = computed(() => this.objects.value.filter(obj => obj.physics && obj.physics.mass == Infinity))
@@ -161,7 +169,8 @@ export class PhysicsSystem {
 
   private updatePhysics(deltaTime: number) {    
     const self = this;
-    // Update positions based on physics properties
+    
+    // First update positions for all objects
     for (const obj of this.physicsObjects.value) {
       if (!obj.physics) {
         continue;
@@ -191,7 +200,7 @@ export class PhysicsSystem {
         continue;
       }
 
-      // First check if the object is stuck and fix it if needed
+      // Uncomment if needed for stuck objects
       /*obj.physics = detectAndFixStuckObjects({
         row: obj.row,
         col: obj.col,
@@ -230,25 +239,36 @@ export class PhysicsSystem {
       obj.physics = wallCollisionResult.physics;
     }
     
-    // Check for collisions between active objects
-    for (let i = 0; i < this.physicsObjects.value.length; i++) {
-      for (let j = 0; j < this.physicsObjects.value.length; j++) {
-        if (i == j) {
+    // Update spatial grid for efficient collision detection
+    this.updateSpatialGrid();
+    
+    // Check for collisions using spatial partitioning
+    const processedCollisions = new Set<string>(); // Track which collisions we've already processed
+    
+    for (const obj1 of this.physicsObjects.value) {
+      if (!obj1.physics || !obj1.physics.active || 
+          obj1.physics.physicsType === PhysicsType.Static) {
+        continue;
+      }
+      
+      // Get potential collision candidates using spatial partitioning
+      const potentialCollisions = this.getPotentialCollisions(obj1);
+      
+      for (const obj2 of potentialCollisions) {
+        if (!obj2.physics || !obj2.physics.active) {
           continue;
         }
-
-        const obj1 = this.physicsObjects.value[i];
-        const obj2 = this.physicsObjects.value[j];
-
-        if (!obj1.physics || !obj2.physics) {
+        
+        // Create a unique key for this collision pair (using object IDs)
+        // Ensure we process each pair only once
+        const collisionKey = [obj1.id, obj2.id].sort().join('_');
+        if (processedCollisions.has(collisionKey)) {
           continue;
         }
-
-        /*if (!obj1.physics || !obj2.physics) {
-          continue;
-        }*/
-
-        if (obj1.physics.physicsType == PhysicsType.Static || obj2.physics.physicsType == PhysicsType.Static) {
+        processedCollisions.add(collisionKey);
+        
+        if (obj1.physics.physicsType === PhysicsType.Static || 
+            obj2.physics.physicsType === PhysicsType.Static) {
           // Static type collisions were handled already
           continue;
         }
@@ -275,15 +295,15 @@ export class PhysicsSystem {
           continue;
         }
           
-        if (obj1.physics.physicsType == PhysicsType.Field || obj2.physics.physicsType == PhysicsType.Field) {
-          // Field type collisions don't actually collide, but they do event.
+        if (obj1.physics.physicsType === PhysicsType.Field || 
+            obj2.physics.physicsType === PhysicsType.Field) {
+          // Field type collisions don't actually collide, but they do trigger events
           if (obj1.physics.event && typeof obj1.physics.event === 'string') {
             this.gameStore.emitEvent(obj1.physics.event, { id: obj2.id });
           }
           if (obj2.physics.event && typeof obj2.physics.event === 'string') {
             this.gameStore.emitEvent(obj2.physics.event, { id: obj1.id });
           }
-
           continue;
         }
 
@@ -311,7 +331,6 @@ export class PhysicsSystem {
         
         // Check if either object has an event property in its physics configuration
         // and emit that event with the ID of the colliding object
-        
         if (obj1.physics.event && typeof obj1.physics.event === 'string') {
           this.gameStore.emitEvent(obj1.physics.event, { id: obj2.id });
         }
@@ -440,15 +459,79 @@ export class PhysicsSystem {
       // Low-end device or performance issues
       this.fixedTimeStep = 1/30; // 30Hz physics updates
       this.maxAccumulatedTime = 0.1; // More aggressive time capping
+      this.gridCellSize = 8; // Larger grid cells for better performance
     } else if (fps < 50) {
       // Medium performance
       this.fixedTimeStep = 1/60; // 60Hz physics updates
       this.maxAccumulatedTime = 0.15;
+      this.gridCellSize = 6; // Medium grid cell size
     } else {
       // High performance
       this.fixedTimeStep = 1/120; // 120Hz physics updates
       this.maxAccumulatedTime = 0.2;
+      this.gridCellSize = 5; // Smaller grid cells for more precise collision detection
     }
+  }
+  
+  // Update the spatial grid for efficient collision detection
+  private updateSpatialGrid() {
+    // Clear the existing grid
+    this.spatialGrid.clear();
+    
+    // Add each physics object to the grid
+    for (const obj of this.physicsObjects.value) {
+      if (!obj.physics || obj.physics.physicsType === PhysicsType.Static) {
+        continue; // Skip objects without physics or static objects
+      }
+      
+      // Calculate grid cells this object occupies
+      const minCellX = Math.floor(obj.col / this.gridCellSize);
+      const maxCellX = Math.floor((obj.col + (obj.width || 1)) / this.gridCellSize);
+      const minCellY = Math.floor(obj.row / this.gridCellSize);
+      const maxCellY = Math.floor((obj.row + (obj.depth || 1)) / this.gridCellSize);
+      
+      // Add object to all cells it occupies
+      for (let x = minCellX; x <= maxCellX; x++) {
+        for (let y = minCellY; y <= maxCellY; y++) {
+          const cellKey = `${x},${y}`;
+          if (!this.spatialGrid.has(cellKey)) {
+            this.spatialGrid.set(cellKey, []);
+          }
+          this.spatialGrid.get(cellKey)?.push(obj);
+        }
+      }
+    }
+  }
+  
+  // Get potential collision candidates for an object using spatial partitioning
+  private getPotentialCollisions(obj: GameObject): GameObject[] {
+    if (!obj.physics) return [];
+    
+    const candidates = new Set<GameObject>();
+    
+    // Calculate grid cells this object occupies
+    const minCellX = Math.floor(obj.col / this.gridCellSize);
+    const maxCellX = Math.floor((obj.col + (obj.width || 1)) / this.gridCellSize);
+    const minCellY = Math.floor(obj.row / this.gridCellSize);
+    const maxCellY = Math.floor((obj.row + (obj.depth || 1)) / this.gridCellSize);
+    
+    // Check all occupied cells for potential collisions
+    for (let x = minCellX; x <= maxCellX; x++) {
+      for (let y = minCellY; y <= maxCellY; y++) {
+        const cellKey = `${x},${y}`;
+        const cellObjects = this.spatialGrid.get(cellKey);
+        
+        if (cellObjects) {
+          for (const other of cellObjects) {
+            if (other !== obj) {
+              candidates.add(other);
+            }
+          }
+        }
+      }
+    }
+    
+    return Array.from(candidates);
   }
   
   // Reset velocities of active physics objects to prevent the "haywire" effect when tabbing back in
